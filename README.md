@@ -1,0 +1,2 @@
+# simplemern
+- npm install
