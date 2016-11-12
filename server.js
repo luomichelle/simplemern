@@ -1,85 +1,65 @@
-// Include Server Dependencies
-var express = require('express');
-var bodyParser = require('body-parser');
-var logger = require('morgan');
-var mongoose = require('mongoose');
+const express = require('express');
+const fs = require('fs');
+const sqlite = require('sql.js');
 
-//Require History Schema
-var History = require('./models/History.js');
+const filebuffer = fs.readFileSync('db/usda-nnd.sqlite3');
 
-// Create Instance of Express
-var app = express();
-var PORT = process.env.PORT || 3000; // Sets an initial port. We'll use this later in our listener
+const db = new sqlite.Database(filebuffer);
 
-// Run Morgan for Logging
-app.use(logger('dev'));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({extended: true}));
-app.use(bodyParser.text());
-app.use(bodyParser.json({type:'application/vnd.api+json'}));
+const app = express();
 
-app.use(express.static('./public'));
+app.set('port', (process.env.API_PORT || 3001));
 
-// -------------------------------------------------
+const COLUMNS = [
+  'carbohydrate_g',
+  'protein_g',
+  'fa_sat_g',
+  'fa_mono_g',
+  'fa_poly_g',
+  'kcal',
+  'description',
+];
+app.get('/api/food', (req, res) => {
+  const param = req.query.q;
 
-// MongoDB Configuration configuration (Change this URL to your own DB)
-mongoose.connect('mongodb://luomichelle:Xigua123456@ds151117.mlab.com:51117/mern');
-var db = mongoose.connection;
+  if (!param) {
+    res.json({
+      error: 'Missing required parameter `q`',
+    });
+    return;
+  }
 
-db.on('error', function (err) {
-  console.log('Mongoose Error: ', err);
+  // WARNING: Not for production use! The following statement
+  // is not protected against SQL injections.
+  const r = db.exec(`
+    select ${COLUMNS.join(', ')} from entries
+    where description like '%${param}%'
+    limit 100
+  `);
+
+  if (r[0]) {
+    res.json(
+      r[0].values.map((entry) => {
+        const e = {};
+        COLUMNS.forEach((c, idx) => {
+          // combine fat columns
+          if (c.match(/^fa_/)) {
+            e.fat_g = e.fat_g || 0.0;
+            e.fat_g = (
+              parseFloat(e.fat_g, 10) + parseFloat(entry[idx], 10)
+            ).toFixed(2);
+          } else {
+            e[c] = entry[idx];
+          }
+        });
+        return e;
+      }),
+    );
+  } else {
+    res.json([]);
+  }
 });
 
-db.once('open', function () {
-  console.log('Mongoose connection successful.');
-});
-
-
-// -------------------------------------------------
-
-// Main Route. This route will redirect to our rendered React application
-app.get('/', function(req, res){
-  res.sendFile('./public/index.html');
-})
-
-// This is the route we will send GET requests to retrieve our most recent search data.
-// We will call this route the moment our page gets rendered
-app.get('/api/', function(req, res) {
-
-  // We will find all the records, sort it in descending order, then limit the records to 5
-  History.find({}).sort([['date', 'descending']]).limit(5)
-    .exec(function(err, doc){
-
-      if(err){
-        console.log(err);
-      }
-      else {
-        res.send(doc);
-      }
-    })
-});
-
-// This is the route we will send POST requests to save each search.
-app.post('/api/', function(req, res){
-  var newSearch = new History(req.body);
-  console.log("BODY: " + req.body.location);
-
-  // Here we'll save the location based on the JSON input. 
-  // We'll use Date.now() to always get the current date time
-  History.create({"location": req.body.location, "date": Date.now()}, function(err){
-    if(err){
-      console.log(err);
-    }
-    else {
-      res.send("Saved Search");
-    }
-  })
-});
-
-
-// -------------------------------------------------
-
-// Listener
-app.listen(PORT, function() {
-  console.log("App listening on PORT: " + PORT);
+app.listen(app.get('port'), () => {
+  console.log(`Find the server at: http://localhost:${app.get('port')}/`); // eslint-disable-line no-console
 });
